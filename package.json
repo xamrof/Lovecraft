@@ -1,0 +1,19 @@
+{
+  "name": "lovecraft-portal",
+  "version": "1.0.0",
+  "description": "A minimalist Lovecraftian access portal built with Electron.",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron ."
+  },
+  "keywords": [
+    "electron",
+    "lovecraft",
+    "kiosk"
+  ],
+  "author": "Your Name",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^39.2.3"
+  }
+}
