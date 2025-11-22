@@ -23,6 +23,8 @@ const CLIENT_ID = getClientId();
 // WebSocket connection and helpers
 let socket = null;
 let pendingPlayResponse = null;
+// Cola para plays remotos recibidos antes de que la página esté lista
+window._lovecraft_pending_plays = window._lovecraft_pending_plays || [];
 function connectSocket() {
     try {
         socket = new WebSocket(SOCKET_SERVER_URL);
@@ -80,6 +82,15 @@ function handleRemotePlay(data) {
     const startAt = data.startAt || Date.now();
     const delay = Math.max(0, startAt - Date.now());
     console.log('Coordinated play received, starting in', delay, 'ms');
+
+    // Si la página aún no ha inicializado el handler, encolamos el play
+    const remotePlayTask = { startAt, origin: data.origin };
+    if (typeof window.remoteTriggerPlay !== 'function' && !window._lovecraft_handlers_ready) {
+        console.log('Handler no listo aun, encolando remote play');
+        window._lovecraft_pending_plays.push(remotePlayTask);
+        return;
+    }
+
     setTimeout(() => {
         if (typeof window.remoteTriggerPlay === 'function') {
             window.remoteTriggerPlay();
@@ -114,6 +125,22 @@ document.addEventListener('DOMContentLoaded', () => {
     const chainTop = document.getElementById('chain-top');
     const lockIcon = document.getElementById('lock-icon');
     const activateButton = document.getElementById('activate-button');
+
+    // Marcar handlers listos y procesar plays pendientes (si hubo señal antes de la carga)
+    window._lovecraft_handlers_ready = true;
+    try {
+        if (window._lovecraft_pending_plays && window._lovecraft_pending_plays.length) {
+            console.log('Procesando plays pendientes:', window._lovecraft_pending_plays.length);
+            window._lovecraft_pending_plays.forEach(task => {
+                const delay = Math.max(0, (task.startAt || Date.now()) - Date.now());
+                setTimeout(() => {
+                    if (typeof window.remoteTriggerPlay === 'function') window.remoteTriggerPlay();
+                    else window.dispatchEvent(new CustomEvent('lovecraft-remote-play'));
+                }, delay);
+            });
+            window._lovecraft_pending_plays = [];
+        }
+    } catch (e) { console.warn('Flush pending plays failed', e); }
 
     // Cursor control for immersive playback
     let cursorTimer = null;
@@ -347,6 +374,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Inicialización: preparar el video pero NO reproducir automáticamente
     videoElement.load();
+    // Registrar listeners para depuración y estado
+    try {
+        videoElement.addEventListener('play', () => console.log('video event: play'));
+        videoElement.addEventListener('playing', () => console.log('video event: playing'));
+        videoElement.addEventListener('pause', () => console.log('video event: pause'));
+        videoElement.addEventListener('ended', () => console.log('video event: ended'));
+        videoElement.addEventListener('error', (e) => console.error('video event: error', e));
+    } catch (e) { console.warn('Could not attach video event listeners', e); }
     // Asegurarse de que no entre en loop: reproducirá solo una vez al desbloquear
     try {
         videoElement.muted = false;
