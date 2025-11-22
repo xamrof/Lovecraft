@@ -164,12 +164,11 @@ function handleRemotePlay(data) {
         window._lovecraft_pending_plays.push(remotePlayTask);
         return;
     }
-
     setTimeout(() => {
         try {
             console.log('handleRemotePlay timeout: remoteTriggerPlay typeof=', typeof window.remoteTriggerPlay, 'handlers_ready=', !!window._lovecraft_handlers_ready);
             if (typeof window.remoteTriggerPlay === 'function') {
-                window.remoteTriggerPlay();
+                window.remoteTriggerPlay(true);
             } else {
                 // No handler yet: attempt to dispatch a custom event
                 try { window.dispatchEvent(new CustomEvent('lovecraft-remote-play')); } catch (e) { console.warn('dispatch lovecraft-remote-play failed', e); }
@@ -271,6 +270,33 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    // Mostrar y reproducir instantáneamente sin animaciones (para clientes remotos)
+    function showVideoInstant() {
+        console.log('showVideoInstant invoked (no animation)');
+        try {
+            // Hide input card immediately
+            try { inputCard.style.display = 'none'; } catch (e) {}
+
+            try { enterFullScreen(); } catch (errEnter) { console.warn('enterFullScreen failed', errEnter); }
+
+            videoContainer.style.display = 'block';
+            // no fade-in class to avoid animation
+
+            videoElement.play().then(() => {
+                try { hideCursor(); } catch (e) {}
+            }).catch(error => {
+                console.error('Instant play failed:', error);
+                // fallback to muted or click overlay
+                if (!videoElement.muted) {
+                    videoElement.muted = true;
+                    videoElement.play().then(() => { showUnmuteButton(); }).catch(() => { showPlaybackClickOverlay(); });
+                } else {
+                    showPlaybackClickOverlay();
+                }
+            });
+        } catch (err) { console.error('showVideoInstant threw', err); }
+    }
+
     // Orquestador: solicita al servidor una reproducción coordinada y programa el inicio
     function orchestratePlay() {
         requestCoordinatedPlay().then(response => {
@@ -288,12 +314,13 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // Cuando una señal remota pide reproducir (desde otro cliente)
-    function remoteTriggerPlay() {
-        console.log('remoteTriggerPlay invoked');
+    function remoteTriggerPlay(isRemote = false) {
+        console.log('remoteTriggerPlay invoked, isRemote=', !!isRemote);
         try {
             // Si ya estamos reproduciendo, no hacer nada
             if (!videoElement.paused && videoElement.currentTime > 0) { console.log('remoteTriggerPlay: already playing'); return; }
-            showVideoAndPlay();
+            if (isRemote) showVideoInstant();
+            else showVideoAndPlay();
         } catch (e) {
             console.error('remoteTriggerPlay threw', e);
         }
@@ -301,7 +328,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // Exponer para que el handler socket (que está fuera de este scope) pueda invocarlo
     window.remoteTriggerPlay = remoteTriggerPlay;
     // También escuchar un evento en caso de que el handler lo prefiera
-    window.addEventListener('lovecraft-remote-play', () => remoteTriggerPlay());
+    window.addEventListener('lovecraft-remote-play', (ev) => remoteTriggerPlay(true));
 
     // Marcar handlers listos y procesar plays pendientes (si hubo señal antes de la carga)
     window._lovecraft_handlers_ready = true;
@@ -311,7 +338,7 @@ document.addEventListener('DOMContentLoaded', () => {
             window._lovecraft_pending_plays.forEach(task => {
                 const delay = Math.max(0, (task.startAt || Date.now()) - Date.now());
                 setTimeout(() => {
-                    if (typeof window.remoteTriggerPlay === 'function') window.remoteTriggerPlay();
+                    if (typeof window.remoteTriggerPlay === 'function') window.remoteTriggerPlay(true);
                     else window.dispatchEvent(new CustomEvent('lovecraft-remote-play'));
                 }, delay);
             });
