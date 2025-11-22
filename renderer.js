@@ -248,6 +248,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
             // Muestra el contenedor de video y lo reproduce (misma lógica para local y remoto)
             function showVideoAndPlay() {
+                console.log('showVideoAndPlay invoked');
+                try {
                 breakTheChains();
 
                 inputCard.style.opacity = '0';
@@ -255,7 +257,11 @@ document.addEventListener('DOMContentLoaded', () => {
                 inputCard.style.pointerEvents = 'none';
 
                 setTimeout(() => {
-                    enterFullScreen();
+                    try {
+                        enterFullScreen();
+                    } catch (errEnter) {
+                        console.warn('enterFullScreen failed', errEnter);
+                    }
 
                     videoContainer.style.display = 'block';
                     videoContainer.classList.add('fade-in');
@@ -302,6 +308,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
                     inputCard.remove();
                 }, 600);
+                } catch (err) {
+                    console.error('showVideoAndPlay threw', err);
+                }
             }
 
             // Orquestador: solicita al servidor una reproducción coordinada y programa el inicio
@@ -322,9 +331,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
             // Cuando una señal remota pide reproducir (desde otro cliente)
             function remoteTriggerPlay() {
-                // Si ya estamos reproduciendo, no hacer nada
-                if (!videoElement.paused && videoElement.currentTime > 0) return;
-                showVideoAndPlay();
+                console.log('remoteTriggerPlay invoked');
+                try {
+                    // Si ya estamos reproduciendo, no hacer nada
+                    if (!videoElement.paused && videoElement.currentTime > 0) { console.log('remoteTriggerPlay: already playing'); return; }
+                    showVideoAndPlay();
+                } catch (e) {
+                    console.error('remoteTriggerPlay threw', e);
+                }
             }
             // Exponer para que el handler socket (que está fuera de este scope) pueda invocarlo
             window.remoteTriggerPlay = remoteTriggerPlay;
