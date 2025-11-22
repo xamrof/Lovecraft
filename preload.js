@@ -1,4 +1,11 @@
 const { contextBridge } = require('electron');
+const path = require('path');
 
-// Preload is intentionally minimal. Expose a safe API surface here if needed.
-contextBridge.exposeInMainWorld('electronAPI', {});
+// Expose a minimal API for the renderer to get the path to bundled assets
+contextBridge.exposeInMainWorld('electronAPI', {
+	getVideoPath: () => {
+		try {
+			return path.join(__dirname, 'Video.mp4');
+		} catch (e) { return './Video.mp4'; }
+	}
+});

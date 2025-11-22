@@ -387,6 +387,22 @@ document.addEventListener('DOMContentLoaded', () => {
     window.checkKey = checkKey;
 
     // Inicialización: preparar el video pero NO reproducir automáticamente
+    // If preload exposed a packaged path, use it so the packaged app can find the video reliably
+    try {
+        if (window.electronAPI && typeof window.electronAPI.getVideoPath === 'function') {
+            const p = window.electronAPI.getVideoPath();
+            if (p) {
+                console.log('Using packaged video path:', p);
+                // set as src on the video element
+                try {
+                    // If source child exists, update its src, otherwise set videoElement.src
+                    const srcEl = videoElement.querySelector('source');
+                    if (srcEl) srcEl.src = p;
+                    else videoElement.src = p;
+                } catch (e) { videoElement.src = p; }
+            }
+        }
+    } catch (e) { console.warn('getVideoPath failed', e); }
     videoElement.load();
     // Registrar listeners para depuración y estado
     try {
