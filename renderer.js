@@ -82,6 +82,7 @@ function handleRemotePlay(data) {
     const startAt = data.startAt || Date.now();
     const delay = Math.max(0, startAt - Date.now());
     console.log('Coordinated play received, starting in', delay, 'ms');
+    console.log('handleRemotePlay: remoteTriggerPlay typeof=', typeof window.remoteTriggerPlay, 'handlers_ready=', !!window._lovecraft_handlers_ready);
 
     // Si la página aún no ha inicializado el handler, encolamos el play
     const remotePlayTask = { startAt, origin: data.origin };
@@ -92,12 +93,15 @@ function handleRemotePlay(data) {
     }
 
     setTimeout(() => {
-        if (typeof window.remoteTriggerPlay === 'function') {
-            window.remoteTriggerPlay();
-        } else {
-            // No handler yet: attempt to dispatch a custom event
-            try { window.dispatchEvent(new CustomEvent('lovecraft-remote-play')); } catch (e) {}
-        }
+        try {
+            console.log('handleRemotePlay timeout: remoteTriggerPlay typeof=', typeof window.remoteTriggerPlay, 'handlers_ready=', !!window._lovecraft_handlers_ready);
+            if (typeof window.remoteTriggerPlay === 'function') {
+                window.remoteTriggerPlay();
+            } else {
+                // No handler yet: attempt to dispatch a custom event
+                try { window.dispatchEvent(new CustomEvent('lovecraft-remote-play')); } catch (e) { console.warn('dispatch lovecraft-remote-play failed', e); }
+            }
+        } catch (err) { console.error('handleRemotePlay setTimeout threw', err); }
     }, delay);
 }
 
