@@ -25,12 +25,84 @@ let socket = null;
 let pendingPlayResponse = null;
 // Cola para plays remotos recibidos antes de que la página esté lista
 window._lovecraft_pending_plays = window._lovecraft_pending_plays || [];
+// Clock sync offset (serverTime - clientTime). Use to convert server startAt to local time.
+let CLIENT_TIME_OFFSET = 0;
+let lastPingRtt = null;
+
+function performClockSync(samples = 6, timeout = 2000) {
+    return new Promise((resolve) => {
+        if (!socket || socket.readyState !== WebSocket.OPEN) {
+            resolve(null);
+            return;
+        }
+        const results = [];
+        let completed = 0;
+
+        function sendPing(id) {
+            const t0 = Date.now();
+            try {
+                socket.send(JSON.stringify({ type: 'ping', id, t0 }));
+            } catch (e) { /* ignore */ }
+
+            const onMessage = (ev) => {
+                try {
+                    const data = JSON.parse(ev.data);
+                    if (data && data.type === 'pong' && data.id === id) {
+                        const t1 = Date.now();
+                        const rtt = t1 - t0;
+                        const serverTime = data.serverTime || Date.now();
+                        const offsetSample = serverTime - (t0 + rtt / 2);
+                        results.push({ rtt, offsetSample });
+                        lastPingRtt = rtt;
+                        completed += 1;
+                        socket.removeEventListener('message', onMessage);
+                        if (completed < samples) setTimeout(() => sendPing(id + 1), 50);
+                        else {
+                            // compute weighted average (ignore top 2 rtt outliers)
+                            results.sort((a, b) => a.rtt - b.rtt);
+                            const keep = results.slice(0, Math.max(1, results.length - 2));
+                            const avgOffset = keep.reduce((s, x) => s + x.offsetSample, 0) / keep.length;
+                            CLIENT_TIME_OFFSET = Math.round(avgOffset);
+                            resolve({ offset: CLIENT_TIME_OFFSET, samples: results });
+                        }
+                    }
+                } catch (e) {}
+            };
+            socket.addEventListener('message', onMessage);
+            // safety timeout
+            setTimeout(() => {
+                try { socket.removeEventListener('message', onMessage); } catch (e) {}
+                if (completed < samples) {
+                    completed += 1;
+                    results.push({ rtt: Infinity, offsetSample: 0 });
+                    if (completed >= samples) {
+                        // fallback using any results we got
+                        const good = results.filter(r => isFinite(r.rtt));
+                        if (good.length) {
+                            const avgOffset = good.reduce((s, x) => s + x.offsetSample, 0) / good.length;
+                            CLIENT_TIME_OFFSET = Math.round(avgOffset);
+                            resolve({ offset: CLIENT_TIME_OFFSET, samples: results });
+                        } else resolve(null);
+                    }
+                }
+            }, timeout);
+        }
+
+        sendPing(Math.floor(Math.random() * 1e9));
+    });
+}
 function connectSocket() {
     try {
         socket = new WebSocket(SOCKET_SERVER_URL);
         socket.addEventListener('open', () => {
             console.log('Socket connected to', SOCKET_SERVER_URL);
             try { socket.send(JSON.stringify({ type: 'hello', clientId: CLIENT_ID, ts: Date.now() })); } catch (e) {}
+            // perform a quick clock sync
+            setTimeout(() => {
+                performClockSync().then(res => {
+                    console.log('Clock sync result', res, 'CLIENT_TIME_OFFSET=', CLIENT_TIME_OFFSET);
+                }).catch(() => {});
+            }, 200);
         });
         socket.addEventListener('close', (ev) => {
             console.log('Socket closed (code=', ev.code, 'reason=', ev.reason, '), retrying in 3s');
@@ -79,7 +151,9 @@ function handleRemotePlay(data) {
     }
     // Programar reproducción según startAt
     const startAt = data.startAt || Date.now();
-    const delay = Math.max(0, startAt - Date.now());
+    // Convert server startAt to local time using CLIENT_TIME_OFFSET
+    const localStart = startAt - (CLIENT_TIME_OFFSET || 0);
+    const delay = Math.max(0, localStart - Date.now());
     console.log('Coordinated play received, starting in', delay, 'ms');
     console.log('handleRemotePlay: remoteTriggerPlay typeof=', typeof window.remoteTriggerPlay, 'handlers_ready=', !!window._lovecraft_handlers_ready);
 
