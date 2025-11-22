@@ -4,7 +4,11 @@
   "description": "A minimalist Lovecraftian access portal built with Electron.",
   "main": "main.js",
   "scripts": {
-    "start": "electron ."
+    "start": "electron .",
+    "dist": "electron-builder --windows portable",
+    "pack": "electron-builder --dir",
+    "build": "electron-builder",
+    "make-portable": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/make-portable.ps1"
   },
   "keywords": [
     "electron",
@@ -14,6 +18,32 @@
   "author": "Your Name",
   "license": "MIT",
   "devDependencies": {
-    "electron": "^39.2.3"
+    "electron": "^39.2.3",
+    "electron-builder": "^26.0.12"
+  }
+  ,
+  "build": {
+    "appId": "com.xamrof.lovecraft",
+    "productName": "Lovecraft",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "**/*",
+      "!dist/**",
+      "!dist",
+      "!dist-**",
+      "!**/win-unpacked/**",
+      "!**/*.map",
+      "!.git/**"
+    ],
+    
+    "win": {
+      "target": [
+        {
+          "target": "portable"
+        }
+      ]
+    }
   }
 }
