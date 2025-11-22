@@ -2,6 +2,85 @@
 // --- CONFIGURACIÓN ---
 const CORRECT_KEY = "1234"; // ¡CAMBIA ESTO A TU CLAVE REAL!
 
+// Sockets: ajustar la URL al servidor desplegado en Railway.
+// Para desarrollo local use: ws://localhost:8080
+const SOCKET_SERVER_URL = window.SOCKET_SERVER_URL || 'ws://localhost:8080';
+
+// Identificador único del cliente (persistente) para evitar reproducir dos veces
+function getClientId() {
+    try {
+        let id = localStorage.getItem('lovecraft_client_id');
+        if (!id) {
+            id = Math.random().toString(36).slice(2) + Date.now().toString(36);
+            localStorage.setItem('lovecraft_client_id', id);
+        }
+        return id;
+    } catch (e) { return 'unknown'; }
+}
+const CLIENT_ID = getClientId();
+
+// WebSocket connection and helpers
+let socket = null;
+let pendingPlayResponse = null;
+function connectSocket() {
+    try {
+        socket = new WebSocket(SOCKET_SERVER_URL);
+        socket.addEventListener('open', () => console.log('Socket connected to', SOCKET_SERVER_URL));
+        socket.addEventListener('close', () => {
+            console.log('Socket closed, retrying in 3s');
+            setTimeout(connectSocket, 3000);
+        });
+        socket.addEventListener('message', (ev) => {
+            try {
+                const data = JSON.parse(ev.data);
+                if (data && data.type === 'play') handleRemotePlay(data);
+            } catch (e) { console.warn('Invalid socket message', e); }
+        });
+    } catch (e) {
+        console.warn('Socket connection failed', e);
+    }
+}
+connectSocket();
+
+function requestCoordinatedPlay() {
+    return new Promise((resolve) => {
+        if (!socket || socket.readyState !== WebSocket.OPEN) {
+            resolve(null);
+            return;
+        }
+        // Esperar una respuesta del servidor con startAt
+        pendingPlayResponse = (data) => resolve(data);
+        socket.send(JSON.stringify({ type: 'request_play', clientId: CLIENT_ID, clientTime: Date.now() }));
+        // fallback si no responde en 2s
+        setTimeout(() => {
+            if (pendingPlayResponse) { pendingPlayResponse = null; resolve(null); }
+        }, 2000);
+    });
+}
+
+function handleRemotePlay(data) {
+    if (!data) return;
+    if (pendingPlayResponse) {
+        // respuesta a una solicitud local
+        pendingPlayResponse(data);
+        pendingPlayResponse = null;
+        return;
+    }
+    // Si viene de otro cliente, programar reproducción
+    if (data.origin === CLIENT_ID) return; // Ignorar si es nuestro propio eco
+    const startAt = data.startAt || Date.now();
+    const delay = Math.max(0, startAt - Date.now());
+    console.log('Coordinated play received, starting in', delay, 'ms');
+    setTimeout(() => {
+        if (typeof window.remoteTriggerPlay === 'function') {
+            window.remoteTriggerPlay();
+        } else {
+            // No handler yet: attempt to dispatch a custom event
+            try { window.dispatchEvent(new CustomEvent('lovecraft-remote-play')); } catch (e) {}
+        }
+    }, delay);
+}
+
 function getCssVariable(variableName) {
     return getComputedStyle(document.documentElement).getPropertyValue(variableName).trim();
 }
@@ -131,8 +210,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             }
 
-            function continueSequence() {
-                // Romper cadenas y hacer la transición al video
+            // Muestra el contenedor de video y lo reproduce (misma lógica para local y remoto)
+            function showVideoAndPlay() {
                 breakTheChains();
 
                 inputCard.style.opacity = '0';
@@ -175,6 +254,33 @@ document.addEventListener('DOMContentLoaded', () => {
                 }, 600);
             }
 
+            // Orquestador: solicita al servidor una reproducción coordinada y programa el inicio
+            function orchestratePlay() {
+                requestCoordinatedPlay().then(response => {
+                    if (response && response.startAt) {
+                        const delay = Math.max(0, response.startAt - Date.now());
+                        console.log('Playing at server startAt, delay', delay);
+                        setTimeout(showVideoAndPlay, delay);
+                    } else {
+                        // Sin servidor o sin respuesta: reproducir inmediatamente
+                        showVideoAndPlay();
+                    }
+                }).catch(() => {
+                    showVideoAndPlay();
+                });
+            }
+
+            // Cuando una señal remota pide reproducir (desde otro cliente)
+            function remoteTriggerPlay() {
+                // Si ya estamos reproduciendo, no hacer nada
+                if (!videoElement.paused && videoElement.currentTime > 0) return;
+                showVideoAndPlay();
+            }
+            // Exponer para que el handler socket (que está fuera de este scope) pueda invocarlo
+            window.remoteTriggerPlay = remoteTriggerPlay;
+            // También escuchar un evento en caso de que el handler lo prefiera
+            window.addEventListener('lovecraft-remote-play', () => remoteTriggerPlay());
+
             if (shackle) {
                 // Reproducir sonido y añadir clase para iniciar la apertura; escuchar transición para continuar
                 playUnlockSound();
@@ -186,7 +292,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     if (e.propertyName === 'transform' || e.propertyName === 'all') {
                         shackle.removeEventListener('transitionend', onEnd);
                         // Un pequeño retardo para que la apertura se asiente visualmente
-                        setTimeout(continueSequence, 120);
+                        setTimeout(orchestratePlay, 120);
                     }
                 };
                 shackle.addEventListener('transitionend', onEnd);
@@ -194,10 +300,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 // Fallback por si no se dispara transitionend
                 setTimeout(() => {
                     shackle.removeEventListener('transitionend', onEnd);
-                    continueSequence();
+                    orchestratePlay();
                 }, 900);
             } else {
-                continueSequence();
+                orchestratePlay();
             }
         } else {
             setLockColor('--color-error');
