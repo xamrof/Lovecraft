@@ -77,8 +77,7 @@ function handleRemotePlay(data) {
         pendingPlayResponse = null;
         return;
     }
-    // Si viene de otro cliente, programar reproducción
-    if (data.origin === CLIENT_ID) return; // Ignorar si es nuestro propio eco
+    // Programar reproducción según startAt
     const startAt = data.startAt || Date.now();
     const delay = Math.max(0, startAt - Date.now());
     console.log('Coordinated play received, starting in', delay, 'ms');
@@ -129,6 +128,106 @@ document.addEventListener('DOMContentLoaded', () => {
     const chainTop = document.getElementById('chain-top');
     const lockIcon = document.getElementById('lock-icon');
     const activateButton = document.getElementById('activate-button');
+
+    // --- Playback functions (moved out of checkKey so remote clients can invoke them) ---
+    // Muestra el contenedor de video y lo reproduce (misma lógica para local y remoto)
+    function showVideoAndPlay() {
+        console.log('showVideoAndPlay invoked');
+        try {
+            breakTheChains();
+
+            inputCard.style.opacity = '0';
+            inputCard.style.transform = 'translateY(-50px) scale(0.95)';
+            inputCard.style.pointerEvents = 'none';
+
+            setTimeout(() => {
+                try {
+                    enterFullScreen();
+                } catch (errEnter) {
+                    console.warn('enterFullScreen failed', errEnter);
+                }
+
+                videoContainer.style.display = 'block';
+                videoContainer.classList.add('fade-in');
+
+                // Play the video and hide the cursor for immersion once playback starts
+                videoElement.play().then(() => {
+                    try {
+                        hideCursor();
+                        // When the user moves the mouse, show the cursor briefly
+                        const onMouseMove = () => {
+                            showCursor();
+                            scheduleHideCursor(2000);
+                        };
+                        document.addEventListener('mousemove', onMouseMove);
+
+                        // When the video ends, restore cursor and cleanup
+                        const onVideoEnd = () => {
+                            showCursor();
+                            document.removeEventListener('mousemove', onMouseMove);
+                            videoElement.removeEventListener('ended', onVideoEnd);
+                            if (cursorTimer) { clearTimeout(cursorTimer); cursorTimer = null; }
+                        };
+                        videoElement.addEventListener('ended', onVideoEnd);
+                    } catch (err) {
+                        console.warn('Cursor control failed:', err);
+                    }
+                }).catch(error => {
+                    console.error("Error trying to play the video:", error);
+                    // Autoplay may be blocked by policy (no user gesture). Try fallback: play muted.
+                    if (!videoElement.muted) {
+                        console.log('Attempting muted fallback play');
+                        videoElement.muted = true;
+                        videoElement.play().then(() => {
+                            console.log('Muted fallback play succeeded');
+                            showUnmuteButton();
+                        }).catch(err2 => {
+                            console.error('Muted fallback failed', err2);
+                            showPlaybackClickOverlay();
+                        });
+                    } else {
+                        showPlaybackClickOverlay();
+                    }
+                });
+
+                inputCard.remove();
+            }, 600);
+        } catch (err) {
+            console.error('showVideoAndPlay threw', err);
+        }
+    }
+
+    // Orquestador: solicita al servidor una reproducción coordinada y programa el inicio
+    function orchestratePlay() {
+        requestCoordinatedPlay().then(response => {
+            if (response && response.startAt) {
+                const delay = Math.max(0, response.startAt - Date.now());
+                console.log('Playing at server startAt, delay', delay);
+                setTimeout(showVideoAndPlay, delay);
+            } else {
+                // Sin servidor o sin respuesta: reproducir inmediatamente
+                showVideoAndPlay();
+            }
+        }).catch(() => {
+            showVideoAndPlay();
+        });
+    }
+
+    // Cuando una señal remota pide reproducir (desde otro cliente)
+    function remoteTriggerPlay() {
+        console.log('remoteTriggerPlay invoked');
+        try {
+            // Si ya estamos reproduciendo, no hacer nada
+            if (!videoElement.paused && videoElement.currentTime > 0) { console.log('remoteTriggerPlay: already playing'); return; }
+            showVideoAndPlay();
+        } catch (e) {
+            console.error('remoteTriggerPlay threw', e);
+        }
+    }
+    // Exponer para que el handler socket (que está fuera de este scope) pueda invocarlo
+    window.remoteTriggerPlay = remoteTriggerPlay;
+    // También escuchar un evento en caso de que el handler lo prefiera
+    window.addEventListener('lovecraft-remote-play', () => remoteTriggerPlay());
 
     // Marcar handlers listos y procesar plays pendientes (si hubo señal antes de la carga)
     window._lovecraft_handlers_ready = true;
@@ -250,104 +349,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             }
 
-            // Muestra el contenedor de video y lo reproduce (misma lógica para local y remoto)
-            function showVideoAndPlay() {
-                console.log('showVideoAndPlay invoked');
-                try {
-                breakTheChains();
-
-                inputCard.style.opacity = '0';
-                inputCard.style.transform = 'translateY(-50px) scale(0.95)';
-                inputCard.style.pointerEvents = 'none';
-
-                setTimeout(() => {
-                    try {
-                        enterFullScreen();
-                    } catch (errEnter) {
-                        console.warn('enterFullScreen failed', errEnter);
-                    }
-
-                    videoContainer.style.display = 'block';
-                    videoContainer.classList.add('fade-in');
-
-                    // Play the video and hide the cursor for immersion once playback starts
-                    videoElement.play().then(() => {
-                        try {
-                            hideCursor();
-                            // When the user moves the mouse, show the cursor briefly
-                            const onMouseMove = () => {
-                                showCursor();
-                                scheduleHideCursor(2000);
-                            };
-                            document.addEventListener('mousemove', onMouseMove);
-
-                            // When the video ends, restore cursor and cleanup
-                            const onVideoEnd = () => {
-                                showCursor();
-                                document.removeEventListener('mousemove', onMouseMove);
-                                videoElement.removeEventListener('ended', onVideoEnd);
-                                if (cursorTimer) { clearTimeout(cursorTimer); cursorTimer = null; }
-                            };
-                            videoElement.addEventListener('ended', onVideoEnd);
-                        } catch (err) {
-                            console.warn('Cursor control failed:', err);
-                        }
-                    }).catch(error => {
-                        console.error("Error trying to play the video:", error);
-                        // Autoplay may be blocked by policy (no user gesture). Try fallback: play muted.
-                        if (!videoElement.muted) {
-                            console.log('Attempting muted fallback play');
-                            videoElement.muted = true;
-                            videoElement.play().then(() => {
-                                console.log('Muted fallback play succeeded');
-                                showUnmuteButton();
-                            }).catch(err2 => {
-                                console.error('Muted fallback failed', err2);
-                                showPlaybackClickOverlay();
-                            });
-                        } else {
-                            showPlaybackClickOverlay();
-                        }
-                    });
-
-                    inputCard.remove();
-                }, 600);
-                } catch (err) {
-                    console.error('showVideoAndPlay threw', err);
-                }
-            }
-
-            // Orquestador: solicita al servidor una reproducción coordinada y programa el inicio
-            function orchestratePlay() {
-                requestCoordinatedPlay().then(response => {
-                    if (response && response.startAt) {
-                        const delay = Math.max(0, response.startAt - Date.now());
-                        console.log('Playing at server startAt, delay', delay);
-                        setTimeout(showVideoAndPlay, delay);
-                    } else {
-                        // Sin servidor o sin respuesta: reproducir inmediatamente
-                        showVideoAndPlay();
-                    }
-                }).catch(() => {
-                    showVideoAndPlay();
-                });
-            }
-
-            // Cuando una señal remota pide reproducir (desde otro cliente)
-            function remoteTriggerPlay() {
-                console.log('remoteTriggerPlay invoked');
-                try {
-                    // Si ya estamos reproduciendo, no hacer nada
-                    if (!videoElement.paused && videoElement.currentTime > 0) { console.log('remoteTriggerPlay: already playing'); return; }
-                    showVideoAndPlay();
-                } catch (e) {
-                    console.error('remoteTriggerPlay threw', e);
-                }
-            }
-            // Exponer para que el handler socket (que está fuera de este scope) pueda invocarlo
-            window.remoteTriggerPlay = remoteTriggerPlay;
-            // También escuchar un evento en caso de que el handler lo prefiera
-            window.addEventListener('lovecraft-remote-play', () => remoteTriggerPlay());
+            
 
             if (shackle) {
                 // Reproducir sonido y añadir clase para iniciar la apertura; escuchar transición para continuar
