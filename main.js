@@ -1,4 +1,6 @@
 const { app, BrowserWindow } = require('electron');
+// Allow autoplay without a user gesture (Chromium flag). Required so remote-triggered playback works.
+app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 const path = require('path');
 
 function createWindow() {

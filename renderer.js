@@ -4,7 +4,8 @@ const CORRECT_KEY = "1234"; // ¡CAMBIA ESTO A TU CLAVE REAL!
 
 // Sockets: ajustar la URL al servidor desplegado en Railway.
 // Para desarrollo local use: ws://localhost:8080
-const SOCKET_SERVER_URL = window.SOCKET_SERVER_URL || 'ws://localhost:8080';
+// Usar WSS en producción (Railway) sin especificar puerto; Railway gestiona el puerto.
+const SOCKET_SERVER_URL = window.SOCKET_SERVER_URL || 'wss://servecito-production.up.railway.app';
 
 // Identificador único del cliente (persistente) para evitar reproducir dos veces
 function getClientId() {
@@ -25,16 +26,24 @@ let pendingPlayResponse = null;
 function connectSocket() {
     try {
         socket = new WebSocket(SOCKET_SERVER_URL);
-        socket.addEventListener('open', () => console.log('Socket connected to', SOCKET_SERVER_URL));
-        socket.addEventListener('close', () => {
-            console.log('Socket closed, retrying in 3s');
+        socket.addEventListener('open', () => {
+            console.log('Socket connected to', SOCKET_SERVER_URL);
+            try { socket.send(JSON.stringify({ type: 'hello', clientId: CLIENT_ID, ts: Date.now() })); } catch (e) {}
+        });
+        socket.addEventListener('close', (ev) => {
+            console.log('Socket closed (code=', ev.code, 'reason=', ev.reason, '), retrying in 3s');
             setTimeout(connectSocket, 3000);
         });
+        socket.addEventListener('error', (err) => {
+            console.error('Socket error', err);
+        });
         socket.addEventListener('message', (ev) => {
+            console.log('Socket message raw:', ev.data);
             try {
                 const data = JSON.parse(ev.data);
                 if (data && data.type === 'play') handleRemotePlay(data);
-            } catch (e) { console.warn('Invalid socket message', e); }
+                else console.log('Socket message (ignored type):', data && data.type);
+            } catch (e) { console.warn('Invalid socket message JSON', e); }
         });
     } catch (e) {
         console.warn('Socket connection failed', e);
@@ -248,6 +257,20 @@ document.addEventListener('DOMContentLoaded', () => {
                         }
                     }).catch(error => {
                         console.error("Error trying to play the video:", error);
+                        // Autoplay may be blocked by policy (no user gesture). Try fallback: play muted.
+                        if (!videoElement.muted) {
+                            console.log('Attempting muted fallback play');
+                            videoElement.muted = true;
+                            videoElement.play().then(() => {
+                                console.log('Muted fallback play succeeded');
+                                showUnmuteButton();
+                            }).catch(err2 => {
+                                console.error('Muted fallback failed', err2);
+                                showPlaybackClickOverlay();
+                            });
+                        } else {
+                            showPlaybackClickOverlay();
+                        }
                     });
 
                     inputCard.remove();
@@ -341,4 +364,77 @@ document.addEventListener('DOMContentLoaded', () => {
             console.log("The Seal has reformed.");
         }
     });
+    
+    // --- Helpers for autoplay fallbacks ---
+    function showUnmuteButton() {
+        try {
+            const existing = document.getElementById('unmute-button');
+            if (existing) return;
+            const btn = document.createElement('button');
+            btn.id = 'unmute-button';
+            btn.textContent = 'Unmute';
+            Object.assign(btn.style, {
+                position: 'fixed',
+                bottom: '24px',
+                right: '24px',
+                padding: '12px 18px',
+                'zIndex': 9999,
+                background: 'rgba(0,0,0,0.6)',
+                color: '#fff',
+                border: 'none',
+                borderRadius: '6px',
+                cursor: 'pointer',
+                fontSize: '14px'
+            });
+            btn.addEventListener('click', () => {
+                try {
+                    videoElement.muted = false;
+                    btn.remove();
+                } catch (e) { console.warn('Unmute failed', e); }
+            });
+            document.body.appendChild(btn);
+        } catch (e) { console.warn('showUnmuteButton failed', e); }
+    }
+
+    function showPlaybackClickOverlay() {
+        try {
+            const existing = document.getElementById('playback-overlay');
+            if (existing) return;
+            const overlay = document.createElement('div');
+            overlay.id = 'playback-overlay';
+            Object.assign(overlay.style, {
+                position: 'fixed',
+                inset: '0',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                background: 'rgba(0,0,0,0.35)',
+                zIndex: 9998,
+                cursor: 'pointer'
+            });
+            const text = document.createElement('div');
+            text.textContent = 'Click to start playback';
+            Object.assign(text.style, {
+                padding: '18px 26px',
+                background: 'rgba(0,0,0,0.7)',
+                color: '#fff',
+                borderRadius: '8px',
+                fontSize: '18px'
+            });
+            overlay.appendChild(text);
+            overlay.addEventListener('click', async () => {
+                try {
+                    await videoElement.play();
+                    overlay.remove();
+                    // If it played muted, try to unmute after user gesture
+                    if (videoElement.muted) {
+                        videoElement.muted = false;
+                    }
+                } catch (e) {
+                    console.error('Click-to-play failed', e);
+                }
+            });
+            document.body.appendChild(overlay);
+        } catch (e) { console.warn('showPlaybackClickOverlay failed', e); }
+    }
 });
